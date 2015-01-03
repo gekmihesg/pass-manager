@@ -1,0 +1,5 @@
+content		passmanager		chrome/content/
+
+component	{1dadf2b7-f243-41b4-a2f2-e53207f29167}			components/passmanager.js
+contract	@gekmihesg.de/login-manager/storage/pass;1		{1dadf2b7-f243-41b4-a2f2-e53207f29167}
+category	login-manager-storage	nsILoginManagerStorage	@gekmihesg.de/login-manager/storage/pass;1
