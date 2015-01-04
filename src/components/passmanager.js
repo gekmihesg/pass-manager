@@ -41,7 +41,9 @@ const EnvironmentVars = [
 	"PASSWORD_STORE_DIR",
 	"PASSWORD_STORE_KEY",
 	"PASSWORD_STORE_GIT",
-	"PASSWORD_STORE_UMASK"
+	"PASSWORD_STORE_UMASK",
+	"TREE_COLORS=",
+	"TREE_CHARSET=ASCII"
 ];
 
 const LoginInfo = new Components.Constructor(
@@ -142,25 +144,22 @@ PassManager.prototype = {
 	strToLogin: function (s) {
 		var login = new LoginInfo();
 		var lines = s.split("\n");
+		login.username = "";
 		login.password = lines.shift();
 		var re = /^([a-zA-Z]+):\s*(.*)$/;
 		var props = new Array();
 		for(let i = 0 ; i < lines.length; i++) {
 			let match = re.exec(lines[i]);
-			if(match == null) {
-				continue;
+			if(match) {
+				props[match[1].toLowerCase()] = match[2].trim();
 			}
-			props[match[1].toLowerCase()] = match[2].trim();
 		}
 		for (let prop in PropertyMap) {
 			if (PropertyMap[prop] && props[PropertyMap[prop]]) {
 				login[prop] = props[PropertyMap[prop]];
 			}
 		}
-		if (login.username) {
-			return login;
-		}
-		return null;
+		return login;
 	},
 
 	loadLogin: function (hostname, loginName) {
@@ -187,16 +186,13 @@ PassManager.prototype = {
 			filter = this.getLoginName(hostname, formSubmitURL, httpRealm);
 		}
 		var lines = result.stdout.split("\n");
-		var re = /(.*[|`])+-- (.*)/;
+		var re = /^.*[|`]+-- (.*)$/;
 		var logins = new Array();
 		for(let i = 0 ; i < lines.length; i++) {
 			let match = re.exec(lines[i]);
-			if(match == null) {
-				continue;
-			}
-			let key = match[2].replace(/\\ /g, ' ');
-			if (!filter || key.slice(0, filter.length) == filter) {
-				logins.push(key);
+			if(match && (!filter ||
+						match[1].slice(0, filter.length) == filter)) {
+				logins.push(match[1]);
 			}
 		}
 		return logins;
@@ -207,7 +203,9 @@ PassManager.prototype = {
 							getService(Ci.nsIEnvironment)
 		this._environment = new Array();
 		for (let i = 0; i < EnvironmentVars.length; i++) {
-			if (e.exists(EnvironmentVars[i])) {
+			if (EnvironmentVars[i].indexOf("=") > 0) {
+				this._environment.push(EnvironmentVars[i]);
+			} else if (e.exists(EnvironmentVars[i])) {
 				this._environment.push(EnvironmentVars[i] + "=" +
 						e.get(EnvironmentVars[i]));
 			}
@@ -294,13 +292,13 @@ PassManager.prototype = {
 		var ret = new Array();
 		for (let i = 0; i < logins.length; i ++) {
 			let login = this.loadLogin(hostname, logins[i]);
-			if (!login) {
-				continue;
+			if (login) {
+				ret.push(login);
 			}
-			ret.push(login);
 		}
-		if (count)
+		if (count) {
 			count.value = ret.length;
+		}
 		return ret;
 	},
 
