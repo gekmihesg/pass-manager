@@ -2,13 +2,11 @@ pass-manager
 ============
 
 Extension for Mozilla Firefox and Thunderbird.
-Replaces the default password managers storage with
-[pass](http://www.passwordstore.org/) by implementing
-[nsILoginManagerStorage](https://developer.mozilla.org/en-US/docs/Mozilla/Tech/XPCOM/Reference/Interface/nsILoginManagerStorage).
+Replaces the default password managers storage with [pass][1] by implementing
+[nsILoginManagerStorage][2].
 
 The implementation **is not complete** and probably never will be. It is
-not possible to disable password saving for single domains or to list all
-saved passwords in the settings dialog.
+not possible to disable password saving for single domains.
 
 
 ### Configuration
@@ -17,23 +15,19 @@ is ``extensions.passmanager.*``.
 
 
 ### Storage format
-Passwords are stored in the subfolder ``mozilla/PRODUCT/DOMAIN`` by default.
+Passwords are stored in the subfolder ``mozilla/PRODUCT/DOMAIN/passmanager###``
+by default. All other files in the three ``mozilla/PRODUCT/DOMAIN/`` will be
+parsed, too.
 
-```
-mozilla
-`-- firefox
-    `-- example.com
-        |-- 0123456789abcdef0123456789abcdef-0123456789abcdef0123456789abcdef
-        `-- 0123456789abcdef0123456789abcdef-abcdef0123456789abcdef0123456789
-```
-The first hash is built from ``hostname``, ``actionURL`` and ``httpRealm``.
-The second hash consists of the first hash and the username. This allows multiple
-logins per domain, modifying saved passwords and more or less efficient searching,
-while trying to disguise the username as securly as possible.
+Currently every file needs some specific fields, which are mapped to a
+[nsILoginInfo][3] object. In future versions, there may be some kind of fuzzy
+autocompletion.
 
-It is not intended to add login information by hand, but to keep all the other
-advantages of pass.
 
 ### Status
 This software is in **early developement state** and should not be used in
 production environment!
+
+[1]: http://www.passwordstore.org/
+[2]: https://developer.mozilla.org/en-US/docs/Mozilla/Tech/XPCOM/Reference/Interface/nsILoginManagerStorage
+[3]: https://developer.mozilla.org/en-US/docs/Mozilla/Tech/XPCOM/Reference/Interface/nsILoginInfo
