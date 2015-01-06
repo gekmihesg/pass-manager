@@ -26,13 +26,13 @@ Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("chrome://passmanager/content/subprocess/subprocess.jsm");
 
 const PropertyMap = {
-	username: "login",
-	password: null,
-	hostname: "url",
-	formSubmitURL: "destination",
-	httpRealm: "realm",
-	usernameField: "loginfield",
-	passwordField: "passfield"
+	username: true,
+	password: false,
+	hostname: true,
+	formSubmitURL: true,
+	httpRealm: true,
+	usernameField: true,
+	passwordField: true
 };
 
 const EnvironmentVars = [
@@ -58,6 +58,7 @@ PassManager.prototype = {
 	_environment: null,
 	_pass: null,
 	_realm: null,
+	_fuzzy: false,
 	_cache: {
 		defaultLifetime: 300,
 		_entries: new Array(),
@@ -69,20 +70,19 @@ PassManager.prototype = {
 		},
 		add: function (key, value, lifetime) {
 			lifetime = (lifetime ? lifetime : this.defaultLifetime) * 1000;
-			if (lifetime <= 0) {
-				return;
+			if (lifetime > 0) {
+				var entry = {
+					value: value,
+					notify: function (timer) {
+						this.cache.del(key);
+					}
+				};
+				var timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+				entry.timer = timer;
+				entry.cache = this;
+				this._entries[key] = entry;
+				timer.initWithCallback(entry, lifetime, Ci.nsITimer.TYPE_ONE_SHOT);
 			}
-			var entry = {
-				value: value,
-				notify: function (timer) {
-					this.cache.del(key);
-				}
-			};
-			var timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-			entry.timer = timer;
-			entry.cache = this;
-			this._entries[key] = entry;
-			timer.initWithCallback(entry, lifetime, Ci.nsITimer.TYPE_ONE_SHOT);
 		},
 		del: function (key) {
 			if (this._entries[key]) {
@@ -121,7 +121,7 @@ PassManager.prototype = {
 	},
 
 	sanitizeHostname: function (hostname) {
-		return hostname.replace(/^.*:\/\//, "");
+		return hostname.replace(/^.*:\/\/([^:\/]+)(?:[:\/].*)?$/, "$1");
 	},
 
 	getHostnamePath: function (hostname) {
@@ -137,7 +137,7 @@ PassManager.prototype = {
 		s.push(login.password);
 		for (let prop in PropertyMap) {
 			if (PropertyMap[prop] && login[prop]) {
-				s.push(PropertyMap[prop] + ": " + login[prop]);
+				s.push(PropertyMap[prop][0] + ": " + login[prop]);
 			}
 		}
 		return s.join("\n");
@@ -158,8 +158,13 @@ PassManager.prototype = {
 			}
 		}
 		for (let prop in PropertyMap) {
-			if (PropertyMap[prop] && props[PropertyMap[prop]]) {
-				login[prop] = props[PropertyMap[prop]];
+			if (PropertyMap[prop]) {
+				for (let i = 0; i < PropertyMap[prop].length; i ++) {
+					if (props[PropertyMap[prop][i]]) {
+						login[prop] = props[PropertyMap[prop][i]];
+						break;
+					}
+				}
 			}
 		}
 		return login;
@@ -168,26 +173,30 @@ PassManager.prototype = {
 	saveLogin: function (loginPath, login) {
 		this.pass(["insert", "-m", "-f", loginPath],
 				this.loginToStr(login));
-		this._cache.add(loginPath, login);
+		this._cache.add(loginPath, login.clone());
 	},
 
-	loadLogin: function (loginPath) {
+	loadLogin: function (loginPath, autocomplete) {
 		var login = this._cache.get(loginPath);
-		if (login) {
-			return login;
-		}
-		var result = this.pass(["show", loginPath]);
-		if (result.exitCode == 0) {
-			login = this.strToLogin(result.stdout);
-			if (login) {
-				this._cache.add(loginPath, login);
-				return login;
+		if (!login) {
+			var result = this.pass(["show", loginPath]);
+			if (result.exitCode == 0) {
+				login = this.strToLogin(result.stdout);
+				if (login) {
+					this._cache.add(loginPath, login);
+				}
 			}
+		}
+		if (login) {
+			if (autocomplete) {
+				return autocomplete(login.clone());
+			}
+			return login.clone();
 		}
 		return null;
 	},
 
-	getLoginPaths: function (hostname, filter, load) {
+	getLoginPaths: function (hostname, filter, load, autocomplete) {
 		var path = this.getHostnamePath(hostname);
 		result = this.pass(["ls", path]);
 		if (result.exitCode != 0) {
@@ -221,7 +230,7 @@ PassManager.prototype = {
 					tree.concat([match[2]]).join("/");
 				let login = null;
 				if (filter || load) {
-					login = this.loadLogin(loginPath);
+					login = this.loadLogin(loginPath, autocomplete);
 					lastSaved = login && (!filter || filter(login));
 				}
 				if (lastSaved) {
@@ -234,26 +243,54 @@ PassManager.prototype = {
 
 	filterLogins: function (load, hostname, formSubmitURL, httpRealm) {
 		var filter = null;
+		var autocomplete = null;
 		if (hostname instanceof Ci.nsILoginInfo) {
 			var oldLogin = hostname;
-			hostname = hostname.hostname;
+			formSubmitURL = oldLogin.formSubmitURL;
+			httpRealm = oldLogin.httpRealm;
+			hostname = oldLogin.hostname;
 			filter = function (login) {
-				return oldLogin.equals(login);
+				return this._fuzzy ?
+					oldLogin.matches(login) :
+					oldLogin.equals(login);
 			};
 		} else if (formSubmitURL != null || httpRealm != null) {
 			filter = function (login) {
 				return login.hostname == hostname &&
 					(formSubmitURL == null ||
 					 	(formSubmitURL == "" ?
-						 	login.formSubmitURL :
+						 	login.formSubmitURL || this._fuzzy :
 							login.formSubmitURL == formSubmitURL)) &&
 					(httpRealm == null ||
 					 	(httpRealm == "" ?
-						 	login.httpRealm :
+						 	login.httpRealmi || this._fuzzy :
 							login.httpRealm == httpRealm))
 			};
 		}
-		return this.getLoginPaths(hostname, filter, load);
+		if (this._fuzzy) {
+			autocomplete = function (login) {
+				var cleanURL = function (url) {
+					return url.replace(/^(.*:\/\/[^\/]+)(?:\/.*)?/, "$1");
+				}
+				if (login.hostname) {
+					login.hostname = cleanURL(login.hostname);
+				} else {
+					login.hostname = hostname ? hostname : "unknown";
+				}
+				if (!login.formSubmitURL && !login.httpRealm) {
+					if (!formSubmitURL && httpRealm == null) {
+						login.formSubmitURL = login.hostname;
+					} else {
+						login.formSubmitURL = formSubmitURL;
+						login.httpRealm = httpRealm;
+					}
+				} else if (login.formSubmitURL) {
+					login.formSubmitURL = cleanURL(login.formSubmitURL);
+				}
+				return login;
+			};
+		}
+		return this.getLoginPaths(hostname, filter, load, autocomplete);
 	},
 
 	init: function () {
@@ -268,18 +305,36 @@ PassManager.prototype = {
 						e.get(EnvironmentVars[i]));
 			}
 		}
-		var prefs = Cc["@mozilla.org/preferences-service;1"].
-				getService(Ci.nsIPrefService);
-		prefs = prefs.getBranch("extensions.passmanager.");
 
-		this._pass = prefs.getCharPref("pass");
-		this._cache.defaultLifetime = prefs.getIntPref("cache");
-		
-		var realm = new Array(prefs.getCharPref("realm"));
-		if (prefs.getBoolPref("realm.append_product")) {
-			realm.push(Services.appinfo.name.toLowerCase());
-		}
-		this._realm = realm.join("/");
+		var prefObserver = {
+			register: function () {
+				var prefServ = Cc["@mozilla.org/preferences-service;1"].
+						getService(Ci.nsIPrefService);
+				this.branch = prefServ.getBranch("extensions.passmanager.");
+				this.branch.addObserver("", this, false);
+				this.observe(this.branch);
+			},
+			observe: function (subject, topic, data) {
+				this.pm._pass = subject.getCharPref("pass");
+				this.pm._fuzzy = subject.getBoolPref("fuzzy");
+				this.pm._cache.defaultLifetime = subject.getIntPref("cache");
+				var realm = new Array(subject.getCharPref("realm"));
+				if (subject.getBoolPref("realm.append_product")) {
+					realm.push(Services.appinfo.name.toLowerCase());
+				}
+				this.pm._realm = realm.join("/");
+				for (prop in PropertyMap) {
+					if (PropertyMap[prop]) {
+						PropertyMap[prop] =
+							subject.getCharPref("map." + prop.toLowerCase()).
+								toLowerCase().split(",");
+					}
+				}
+				subject.addObserver("", this, false);
+			}
+		};
+		prefObserver.pm = this;
+		prefObserver.register();
 	},
 
 	initialize: function () {
@@ -321,23 +376,33 @@ PassManager.prototype = {
 		}
 		if (newLogin instanceof Ci.nsIPropertyBag) {
 			let propEnum = newLogin.enumerator;
-			let tmp = {};
-			while (propEnum.hasMoreElements()) {
-				let prop = propEnum.getNext().QueryInterface(Ci.nsIProperty);
-				tmp[prop.name] = prop.value;
-			}
-			newLogin = tmp;
-		}
-		var changed = false;
-		for (let prop in PropertyMap) {
-			if (newLogin[prop] && oldLogin[prop] != newLogin[prop]) {
-				oldLogin[prop] = newLogin[prop];
-				changed = true;
-			}
-		}
-		if (changed) {
 			for (let i = 0; i < logins.length; i++) {
-				this.saveLogin(logins[i], oldLogin);
+				let login = this.loadLogin(logins[i]);
+				let changed = false;
+				while (propEnum.hasMoreElements()) {
+					let prop = propEnum.getNext().QueryInterface(Ci.nsIProperty);
+					if (prop.name in PropertyMap &&
+							login[prop.name] != prop.value) {
+						login[prop.name] = prop.value;
+						changed = true;
+					}
+				}
+				if (changed) {
+					this.saveLogin(logins[i], login);
+				}
+			}
+		} else {
+			let changed = false;
+			for (let prop in PropertyMap) {
+				if (newLogin[prop] && oldLogin[prop] != newLogin[prop]) {
+					oldLogin[prop] = newLogin[prop];
+					changed = true;
+				}
+			}
+			if (changed) {
+				for (let i = 0; i < logins.length; i++) {
+					this.saveLogin(logins[i], oldLogin);
+				}
 			}
 		}
 	},

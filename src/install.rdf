@@ -5,9 +5,9 @@
 
 	<Description about="urn:mozilla:install-manifest">
 		<em:id>passmanager@gekmihesg.de</em:id>
-		<em:name>pass-Manager</em:name>
+		<em:name>pass-manager</em:name>
 		<em:description>Replace integrated password manager by zx2c4's pass</em:description>
-		<em:version>0.2</em:version>
+		<em:version>0.3</em:version>
 		<em:creator>Markus Weippert</em:creator>
 		<em:type>2</em:type>
 		<!-- Mozilla Firefox -->
