@@ -25,6 +25,8 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("chrome://passmanager/content/subprocess/subprocess.jsm");
 
+// all these values are handled, but false values
+// are not mapped automatically
 const PropertyMap = {
 	username: true,
 	password: false,
@@ -35,6 +37,7 @@ const PropertyMap = {
 	passwordField: true
 };
 
+// vars without "=" are copied from existing environment
 const EnvironmentVars = [
 	"HOME", "USER", "DISPLAY", "PATH",
 	"GPG_AGENT_INFO",
@@ -54,14 +57,16 @@ function PassManager() {}
 PassManager.prototype = {
 	classID: Components.ID("{1dadf2b7-f243-41b4-a2f2-e53207f29167}"),
 	QueryInterface: XPCOMUtils.generateQI([Ci.nsILoginManagerStorage]),
-	_uiBusy: false,
+
 	_environment: null,
-	_pass: null,
-	_realm: null,
+	_propMap: null,
+	_passCmd: "",
+	_realm: "",
 	_fuzzy: false,
+
 	_cache: {
 		defaultLifetime: 300,
-		_entries: new Array(),
+		_entries: {},
 		get: function (key) {
 			if (this._entries[key]) {
 				return this._entries[key].value;
@@ -71,13 +76,13 @@ PassManager.prototype = {
 		add: function (key, value, lifetime) {
 			lifetime = (lifetime ? lifetime : this.defaultLifetime) * 1000;
 			if (lifetime > 0) {
-				var entry = {
+				let entry = {
 					value: value,
 					notify: function (timer) {
 						this.cache.del(key);
 					}
 				};
-				var timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+				let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
 				entry.timer = timer;
 				entry.cache = this;
 				this._entries[key] = entry;
@@ -97,15 +102,14 @@ PassManager.prototype = {
 		}
 	},
 
-
-	stub: function(arguments) {
+	_stub: function(arguments) {
 		throw Error('Not yet implemented: ' + arguments.callee.name + '()');
 	},
 
-	pass: function (args, stdin) {
-		var result = null;
+	_pass: function (args, stdin) {
+		let result = null;
 		pi = {
-			command: this._pass,
+			command: this._passCmd,
 			arguments: args,
 			charset: "UTF-8",
 			environment: this._environment,
@@ -113,55 +117,65 @@ PassManager.prototype = {
 			stdin: stdin,
 			mergeStderr: false
 		}
-		var p = subprocess.call(pi);
-		this._uiBusy = true;
+		let p = subprocess.call(pi);
 		p.wait();
-		this._uiBusy = false;
 		return result;
 	},
 
-	sanitizeHostname: function (hostname) {
-		return hostname.replace(/^.*:\/\/([^:\/]+)(?:[:\/].*)?$/, "$1");
+	// strip protocol, port and path from URL
+	_sanitizeHostname: function (url) {
+		return url.replace(/^.*:\/\/([^:\/]+)(?:[:\/].*)?$/, "$1");
 	},
 
-	getHostnamePath: function (hostname) {
+	// strip path from URL
+	_sanitizeURL: function (url) {
+		return url.replace(/^(.*:\/\/[^\/]+)(?:\/.*)?/, "$1");
+	},
+
+	_getHostnamePath: function (hostname) {
 		if (hostname) {
 			return this._realm + "/" +
-				this.sanitizeHostname(hostname);
+				this._sanitizeHostname(hostname);
 		}
 		return this._realm;
 	},
 
-	loginToStr: function (login) {
-		var s = new Array();
+	_loginToStr: function (login) {
+		let s = [];
 		s.push(login.password);
-		for (let prop in PropertyMap) {
-			if (PropertyMap[prop] && login[prop]) {
-				s.push(PropertyMap[prop][0] + ": " + login[prop]);
+		for (let prop in this._propMap) {
+			if (this._propMap[prop] && login[prop]) {
+				s.push(this._propMap[prop][0] + ": " + login[prop]);
 			}
 		}
 		return s.join("\n");
 	},
 
-	strToLogin: function (s) {
-		var login = new LoginInfo();
-		var lines = s.split("\n");
+	_strToLogin: function (s) {
+		let lines = s.split("\n");
+		let re = /^([a-zA-Z]+):\s*(.*)$/;
+
+		// init login with safe values
+		let login = new LoginInfo();
 		login.username = "";
 		login.hostname = "";
 		login.password = lines.shift();
-		var re = /^([a-zA-Z]+):\s*(.*)$/;
-		var props = new Array();
-		for(let i = 0 ; i < lines.length; i++) {
-			let match = re.exec(lines[i]);
+
+		// parse input to object
+		let props = {};
+		for each (let line in lines) {
+			let match = re.exec(line);
 			if(match) {
 				props[match[1].toLowerCase()] = match[2].trim();
 			}
 		}
-		for (let prop in PropertyMap) {
-			if (PropertyMap[prop]) {
-				for (let i = 0; i < PropertyMap[prop].length; i ++) {
-					if (props[PropertyMap[prop][i]]) {
-						login[prop] = props[PropertyMap[prop][i]];
+
+		// map object to login
+		for (let prop in this._propMap) {
+			if (this._propMap[prop]) {
+				for each (let name in this._propMap[prop]) {
+					if (props[name]) {
+						login[prop] = props[name];
 						break;
 					}
 				}
@@ -170,45 +184,47 @@ PassManager.prototype = {
 		return login;
 	},
 	
-	saveLogin: function (loginPath, login) {
-		this.pass(["insert", "-m", "-f", loginPath],
-				this.loginToStr(login));
+	_saveLogin: function (loginPath, login) {
+		this._pass(["insert", "-m", "-f", loginPath],
+				this._loginToStr(login));
+
+		// update cache with logins clone
 		this._cache.add(loginPath, login.clone());
 	},
 
-	loadLogin: function (loginPath, autocomplete) {
-		var login = this._cache.get(loginPath);
+	_loadLogin: function (loginPath) {
+		let login = this._cache.get(loginPath);
 		if (!login) {
-			var result = this.pass(["show", loginPath]);
+			let result = this._pass(["show", loginPath]);
 			if (result.exitCode == 0) {
-				login = this.strToLogin(result.stdout);
+				login = this._strToLogin(result.stdout);
 				if (login) {
 					this._cache.add(loginPath, login);
 				}
 			}
 		}
 		if (login) {
-			if (autocomplete) {
-				return autocomplete(login.clone());
-			}
+			// always return a clone!
+			// we need the original login cached!
 			return login.clone();
 		}
 		return null;
 	},
 
-	getLoginPaths: function (hostname, filter, load, autocomplete) {
-		var path = this.getHostnamePath(hostname);
-		result = this.pass(["ls", path]);
+	// return all paths to logins matching hostname,
+	// all logins if hostname is undefined
+	_getLoginPaths: function (hostname) {
+		let path = this._getHostnamePath(hostname);
+		result = this._pass(["ls", path]);
 		if (result.exitCode != 0) {
-			return new Array();
+			return [];
 		}
-		var lines = result.stdout.split("\n");
-		var re = /^(.*[|`]+)-- (.*)$/;
-		var logins = new Array();
-		var tree = new Array();
-		var lastIndent = 0;
-		var lastNode = null;
-		var lastSaved = false;
+		let lines = result.stdout.split("\n");
+		let re = /^(.*[|`]+)-- (.*)$/;
+		let paths = [];
+		let tree = [];
+		let lastIndent = 0;
+		let lastNode = null;
 		for(let i = 0 ; i < lines.length; i++) {
 			let match = re.exec(lines[i]);
 			if(match) {
@@ -216,212 +232,229 @@ PassManager.prototype = {
 				if (lastNode) {
 					if (lastIndent < indent) {
 						tree.push(lastNode);
-						if (lastSaved) {
-							logins.pop();
-						}
+						paths.pop();
 					} else if (lastIndent > indent) {
 						tree.pop();
 					}
 				}
 				lastIndent = indent;
 				lastNode = match[2];
-				lastSaved = true;
-				let loginPath = path + "/" +
-					tree.concat([match[2]]).join("/");
-				let login = null;
-				if (filter || load) {
-					login = this.loadLogin(loginPath, autocomplete);
-					lastSaved = login && (!filter || filter(login));
+				paths.push(path + "/" +
+					tree.concat([lastNode]).join("/"));
+			}
+		}
+		return paths;
+	},
+
+	// for fuzzy option
+	_autocomplete: function (login, md) {
+		if (login.hostname) {
+			login.hostname = this._sanitizeURL(login.hostname);
+		} else {
+			// set to unknown for "Saved Passwords..."
+			login.hostname = md.hostname ? md.hostname : "unknown";
+		}
+		if (login.formSubmitURL) {
+			login.formSubmitURL = this._sanitizeURL(login.formSubmitURL);
+		} else if (!login.formSubmitURL && !login.httpRealm) {
+			if (!md.formSubmitURL && !md.httpRealm) {
+				// no info if protocol or HTML login requested,
+				// choose HTML since we may return an empty string
+				// as wildcard here
+				login.formSubmitURL = "";
+			} else {
+				login.formSubmitURL = md.formSubmitURL;
+				login.httpRealm = md.httpRealm;
+			}
+		}
+		if (!login.usernameField) {
+			login.usernameField = md.usernameField;
+		}
+		if (!login.passwordField) {
+			login.passwordField = md.passwordField;
+		}
+		return login;
+	},
+
+	_filterLogins: function (matchData) {
+		// copy all handled fields from matchData
+		let md = {};
+		for (let prop in this._propMap) {
+			if (prop in matchData) {
+				md[prop] = matchData[prop];
+			}
+		}
+
+		let paths = [];
+		let logins = [];
+
+		for each (let path in this._getLoginPaths(md.hostname)) {
+			let login = this._loadLogin(path);
+			if (login) {
+				if (this._fuzzy) {
+					this._autocomplete(login, md);
 				}
-				if (lastSaved) {
-					logins.push(load ? login : loginPath);
+				let matches = true;
+				for (let prop in md) {
+					if (login[prop] != md[prop]) {
+						matches = false;
+						break;
+					}
+				}
+				if (matches) {
+					paths.push(path);
+					logins.push(login);
 				}
 			}
 		}
-		return logins;
+		return [logins, paths];
 	},
 
-	filterLogins: function (load, hostname, formSubmitURL, httpRealm) {
-		var filter = null;
-		var autocomplete = null;
-		if (hostname instanceof Ci.nsILoginInfo) {
-			var oldLogin = hostname;
-			formSubmitURL = oldLogin.formSubmitURL;
-			httpRealm = oldLogin.httpRealm;
-			hostname = oldLogin.hostname;
-			filter = function (login) {
-				return this._fuzzy ?
-					oldLogin.matches(login) :
-					oldLogin.equals(login);
-			};
-		} else if (formSubmitURL != null || httpRealm != null) {
-			filter = function (login) {
-				return login.hostname == hostname &&
-					(formSubmitURL == null ||
-					 	(formSubmitURL == "" ?
-						 	login.formSubmitURL || this._fuzzy :
-							login.formSubmitURL == formSubmitURL)) &&
-					(httpRealm == null ||
-					 	(httpRealm == "" ?
-						 	login.httpRealmi || this._fuzzy :
-							login.httpRealm == httpRealm))
-			};
-		}
-		if (this._fuzzy) {
-			autocomplete = function (login) {
-				var cleanURL = function (url) {
-					return url.replace(/^(.*:\/\/[^\/]+)(?:\/.*)?/, "$1");
-				}
-				if (login.hostname) {
-					login.hostname = cleanURL(login.hostname);
-				} else {
-					login.hostname = hostname ? hostname : "unknown";
-				}
-				if (!login.formSubmitURL && !login.httpRealm) {
-					if (!formSubmitURL && httpRealm == null) {
-						login.formSubmitURL = login.hostname;
-					} else {
-						login.formSubmitURL = formSubmitURL;
-						login.httpRealm = httpRealm;
-					}
-				} else if (login.formSubmitURL) {
-					login.formSubmitURL = cleanURL(login.formSubmitURL);
-				}
-				return login;
-			};
-		}
-		return this.getLoginPaths(hostname, filter, load, autocomplete);
-	},
-
-	init: function () {
+	// legacy function called by initialize
+	init: function init() {
+		// setup environment
 		e = Cc["@mozilla.org/process/environment;1"].
 							getService(Ci.nsIEnvironment)
-		this._environment = new Array();
-		for (let i = 0; i < EnvironmentVars.length; i++) {
-			if (EnvironmentVars[i].indexOf("=") > 0) {
-				this._environment.push(EnvironmentVars[i]);
-			} else if (e.exists(EnvironmentVars[i])) {
-				this._environment.push(EnvironmentVars[i] + "=" +
-						e.get(EnvironmentVars[i]));
+		this._environment = [];
+		for each (let env in EnvironmentVars) {
+			if (env.indexOf("=") > 0) {
+				this._environment.push(env);
+			} else if (e.exists(env)) {
+				this._environment.push(env + "=" + e.get(env));
 			}
 		}
 
-		var prefObserver = {
+		// load preferences
+		let prefObserver = {
 			register: function () {
-				var prefServ = Cc["@mozilla.org/preferences-service;1"].
+				let prefServ = Cc["@mozilla.org/preferences-service;1"].
 						getService(Ci.nsIPrefService);
 				this.branch = prefServ.getBranch("extensions.passmanager.");
 				this.branch.addObserver("", this, false);
+
+				// initial loading for preferences
 				this.observe(this.branch);
 			},
+
 			observe: function (subject, topic, data) {
-				this.pm._pass = subject.getCharPref("pass");
+				this.pm._passCmd = subject.getCharPref("pass");
 				this.pm._fuzzy = subject.getBoolPref("fuzzy");
 				this.pm._cache.defaultLifetime = subject.getIntPref("cache");
-				var realm = new Array(subject.getCharPref("realm"));
+
+				// construct realm
+				let realm = [subject.getCharPref("realm")];
 				if (subject.getBoolPref("realm.append_product")) {
 					realm.push(Services.appinfo.name.toLowerCase());
 				}
 				this.pm._realm = realm.join("/");
+
+				// load property map
+				this.pm._propMap = {};
 				for (prop in PropertyMap) {
 					if (PropertyMap[prop]) {
-						PropertyMap[prop] =
+						this.pm._propMap[prop] =
 							subject.getCharPref("map." + prop.toLowerCase()).
 								toLowerCase().split(",");
+					} else {
+						this.pm._propMap[prop] = false;
 					}
 				}
-				subject.addObserver("", this, false);
 			}
 		};
+
 		prefObserver.pm = this;
 		prefObserver.register();
 	},
 
-	initialize: function () {
+	initialize: function initialize() {
 		this.init();
 		return Promise.resolve();
 	},
 
-	terminate: function () {
+	terminate: function terminate() {
 		return Promise.resolve();
 	},
 
 	addLogin: function addLogin(login) {
-		var logins = this.filterLogins(false, login.hostname);
-		var path = this.getHostnamePath(login.hostname);
-		var re = /\/passmanager([0-9]+)$/;
-		var max = 0;
-		for (let i = 0; i < logins.length; i ++) {
-			let matches = re.exec(logins[i]);
+		let paths = this._getLoginPaths(login.hostname);
+		let re = /\/passmanager([0-9]+)$/;
+		let max = 0;
+		for each (let path in paths) {
+			let matches = re.exec(path);
 			if (matches && matches[1] > max) {
 				max = Number(matches[1]);
 			}
 		}
-		this.saveLogin(path + "/passmanager" + (max + 1), login);
+		let path = this._getHostnamePath(login.hostname);
+		this._saveLogin(path + "/passmanager" + (max + 1), login);
 	},
 
 	removeLogin: function removeLogin(login) {
-		var logins = this.filterLogins(false, login);
-		for (let i = 0; i < logins.length; i++) {
-			let loginPath = logins[i];
-			this.pass(["rm", "-f", loginPath]);
-			this._cache.del(loginPath);
+		let [logins, paths] = this._filterLogins(login);
+		for each (let path in paths) {
+			this._pass(["rm", "-f", path]);
+			this._cache.del(path);
 		}
 	},
 
 	modifyLogin: function modifyLogin(oldLogin, newLogin) {
-		var logins = this.filterLogins(false, oldLogin);
+		// try to find original login
+		let [logins, paths] = this._filterLogins(oldLogin);
 		if (logins.length == 0) {
 			return;
 		}
+
 		if (newLogin instanceof Ci.nsIPropertyBag) {
-			let propEnum = newLogin.enumerator;
-			for (let i = 0; i < logins.length; i++) {
-				let login = this.loadLogin(logins[i]);
+			// we know what we are supposed to change,
+			// so we can load the original login, without
+			// autocompletion and only update what's requested
+			for each (let path in paths) {
 				let changed = false;
+				let login = this._loadLogin(path);
+				let propEnum = newLogin.enumerator;
 				while (propEnum.hasMoreElements()) {
 					let prop = propEnum.getNext().QueryInterface(Ci.nsIProperty);
-					if (prop.name in PropertyMap &&
+					if (prop.name in this._propMap &&
 							login[prop.name] != prop.value) {
 						login[prop.name] = prop.value;
 						changed = true;
 					}
 				}
 				if (changed) {
-					this.saveLogin(logins[i], login);
+					this._saveLogin(path, login);
 				}
 			}
 		} else {
+			// newLogin is nsLoginInfo, copy all properties if changed.
+			// this case does not seem to happen...
 			let changed = false;
-			for (let prop in PropertyMap) {
+			for (let prop in this._propMap) {
 				if (newLogin[prop] && oldLogin[prop] != newLogin[prop]) {
 					oldLogin[prop] = newLogin[prop];
 					changed = true;
 				}
 			}
 			if (changed) {
-				for (let i = 0; i < logins.length; i++) {
-					this.saveLogin(logins[i], oldLogin);
+				for each (let path in paths) {
+					this._saveLogin(path, oldLogin);
 				}
 			}
 		}
 	},
 
 	getAllLogins: function getAllLogins(count) {
-		var ret = this.filterLogins(true);
-		if (count) {
-			count.value = ret.length;
-		}
-		return ret;
+		let [logins, paths] = this._filterLogins({});
+		count.value = logins.length;
+		return logins;
 	},
 
 	removeAllLogins: function removeAllLogins() {
-		this.pass(["rm", "-r", "-f", this._realm]);
+		this._pass(["rm", "-r", "-f", this._realm]);
 		this._cache.clear();
 	},
 
 	getAllDisabledHosts: function getAllDisabledHosts(count) {
-		this.stub(arguments);
+		this._stub(arguments);
 	},
 
 	getLoginSavingEnabled: function getLoginSavingEnabled(hostname) {
@@ -429,28 +462,53 @@ PassManager.prototype = {
 	},
 
 	setLoginSavingEnabled: function setLoginSavingEnabled(hostname, enabled) {
-		this.stub(arguments);
+		this._stub(arguments);
 	},
 
-	searchLogins: function searchLogins() {
-		this.stub(arguments);
+	searchLogins: function searchLogins(count, matchData) {
+		// extract from nsPropertyBag
+		let md = {};
+        let propEnum = matchData.enumerator;
+        while (propEnum.hasMoreElements()) {
+            let prop = propEnum.getNext().QueryInterface(Ci.nsIProperty);
+            md[prop.name] = prop.value;
+        }
+
+		let [logins, paths] = this._filterLogins(md);
+		count.value = logins.length;
+		return logins;
 	},
 
 	findLogins: function findLogins(count, hostname, formSubmitURL, httpRealm) {
-		var ret = this.filterLogins(true, hostname, formSubmitURL, httpRealm);
-		if (count) {
-			count.value = ret.length;
+		let login= {
+            hostname: hostname,
+            formSubmitURL: formSubmitURL,
+            httpRealm: httpRealm
+        };
+        let md = {};
+        for each (let prop in ["hostname", "formSubmitURL", "httpRealm"]) {
+			// empty string means wildcard, null means null
+            if (login[prop] != "") {
+                md[prop] = login[prop];
+			}
 		}
-		return ret;
+
+        let [logins, paths] = this._filterLogins(md);
+        count.value = logins.length;
+        return logins;
 	},
 
+	// called to check if its worth calling findLogins,
+	// which may prompt for master password or pinentry in our case
 	countLogins: function countLogins(hostname, formSubmitURL, httpRealm) {
-		var logins = this.filterLogins(false, hostname, formSubmitURL, httpRealm);
-		return logins.length;
+		// only way to check if we have logins without
+		// decrypting is by hostname
+		let paths = this._getLoginPaths(hostname);
+		return paths.length;
 	},
 
 	get uiBusy() {
-		return this._uiBusy;
+		return false;
 	},
 
 	get isLoggedIn() {
