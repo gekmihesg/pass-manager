@@ -25,6 +25,11 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("chrome://passmanager/content/subprocess/subprocess.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "LoginHelper",
+                                  "resource://gre/modules/LoginHelper.jsm");
+
+
+
 // all these values are handled, but false values
 // are not mapped automatically
 const PropertyMap = {
@@ -63,6 +68,16 @@ PassManager.prototype = {
 	_passCmd: "",
 	_realm: "",
 	_fuzzy: false,
+
+	__storage_json: null,
+	get _storage_json() {
+		if (!this.__storage_json) {
+			this.__storage_json = Cc["@mozilla.org/login-manager/storage/json;1"]
+				.getService(Ci.nsILoginManagerStorage);
+			this.__storage_json.initialize();
+		}
+		return this.__storage_json;
+	},
 
 	_cache: {
 		defaultLifetime: 300,
@@ -309,6 +324,11 @@ PassManager.prototype = {
 		}
 		return [logins, paths];
 	},
+	
+	_isFirefoxAccount: function(hostname, httpRealm) {
+		return ((hostname == "chrome://FirefoxAccounts") &&
+				(httpRealm == "Firefox Accounts credentials"))
+	},
 
 	// legacy function called by initialize
 	init: function init() {
@@ -323,6 +343,7 @@ PassManager.prototype = {
 				this._environment.push(env + "=" + e.get(env));
 			}
 		}
+		this._storage_json;
 
 		// load preferences
 		let prefObserver = {
@@ -376,6 +397,10 @@ PassManager.prototype = {
 	},
 
 	addLogin: function addLogin(login) {
+		LoginHelper.checkLoginValues(login);
+		if (this._isFirefoxAccount(login.hostname, login.httpRealm))
+			return this._storage_json.addLogin(login);
+
 		let paths = this._getLoginPaths(login.hostname);
 		let re = /\/passmanager([0-9]+)$/;
 		let max = 0;
@@ -390,6 +415,8 @@ PassManager.prototype = {
 	},
 
 	removeLogin: function removeLogin(login) {
+		if (this._isFirefoxAccount(login.hostname, login.httpRealm))
+			return this._storage_json.removeLogin(login);
 		let [logins, paths] = this._filterLogins(login);
 		for each (let path in paths) {
 			this._pass(["rm", "-f", path]);
@@ -398,6 +425,8 @@ PassManager.prototype = {
 	},
 
 	modifyLogin: function modifyLogin(oldLogin, newLogin) {
+		if (this._isFirefoxAccount(newLogin.hostname, newLogin.httpRealm))
+			return this._storage_json.modifyLogin(oldLogin, newLogin);
 		// try to find original login
 		let [logins, paths] = this._filterLogins(oldLogin);
 		if (logins.length == 0) {
@@ -480,6 +509,10 @@ PassManager.prototype = {
 	},
 
 	findLogins: function findLogins(count, hostname, formSubmitURL, httpRealm) {
+		if (this._isFirefoxAccount(hostname, httpRealm))
+			return this._storage_json.findLogins(
+					count, hostname, formSubmitURL, httpRealm);
+
 		let login= {
             hostname: hostname,
             formSubmitURL: formSubmitURL,
