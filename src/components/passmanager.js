@@ -26,7 +26,7 @@ Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("chrome://passmanager/content/subprocess/subprocess.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "LoginHelper",
-                                  "resource://gre/modules/LoginHelper.jsm");
+				"resource://gre/modules/LoginHelper.jsm");
 
 
 
@@ -317,8 +317,8 @@ PassManager.prototype = {
 	},
 	
 	_isFirefoxAccount: function(hostname, httpRealm) {
-		return ((hostname == "chrome://FirefoxAccounts") &&
-				(httpRealm == "Firefox Accounts credentials"))
+		return hostname == "chrome://FirefoxAccounts" &&
+				httpRealm == "Firefox Accounts credentials"
 	},
 
 	// legacy function called by initialize
@@ -392,8 +392,9 @@ PassManager.prototype = {
 
 	addLogin: function addLogin(login) {
 		LoginHelper.checkLoginValues(login);
-		if (this._isFirefoxAccount(login.hostname, login.httpRealm))
+		if (this._isFirefoxAccount(login.hostname, login.httpRealm)) {
 			return this._storage_json.addLogin(login);
+		}
 
 		let paths = this._getLoginPaths(login.hostname);
 		let re = /\/passmanager([0-9]+)$/;
@@ -409,8 +410,9 @@ PassManager.prototype = {
 	},
 
 	removeLogin: function removeLogin(login) {
-		if (this._isFirefoxAccount(login.hostname, login.httpRealm))
+		if (this._isFirefoxAccount(login.hostname, login.httpRealm)) {
 			return this._storage_json.removeLogin(login);
+		}
 		let [logins, paths] = this._filterLogins(login);
 		for each (let path in paths) {
 			this._pass(["rm", "-f", path]);
@@ -419,8 +421,9 @@ PassManager.prototype = {
 	},
 
 	modifyLogin: function modifyLogin(oldLogin, newLogin) {
-		if (this._isFirefoxAccount(oldLogin.hostname, oldLogin.httpRealm))
+		if (this._isFirefoxAccount(oldLogin.hostname, oldLogin.httpRealm)) {
 			return this._storage_json.modifyLogin(oldLogin, newLogin);
+		}
 		// try to find original login
 		let [logins, paths] = this._filterLogins(oldLogin);
 		if (logins.length == 0) {
@@ -491,11 +494,14 @@ PassManager.prototype = {
 	searchLogins: function searchLogins(count, matchData) {
 		// extract from nsPropertyBag
 		let md = {};
-        let propEnum = matchData.enumerator;
-        while (propEnum.hasMoreElements()) {
-            let prop = propEnum.getNext().QueryInterface(Ci.nsIProperty);
-            md[prop.name] = prop.value;
-        }
+		let propEnum = matchData.enumerator;
+		while (propEnum.hasMoreElements()) {
+			let prop = propEnum.getNext().QueryInterface(Ci.nsIProperty);
+			md[prop.name] = prop.value;
+		}
+		if (this._isFirefoxAccount(md.hostname, md.httpRealm)) {
+			return this._storage_json.searchLogins(count, matchData);
+		}
 
 		let [logins, paths] = this._filterLogins(md);
 		count.value = logins.length;
@@ -503,31 +509,36 @@ PassManager.prototype = {
 	},
 
 	findLogins: function findLogins(count, hostname, formSubmitURL, httpRealm) {
-		if (this._isFirefoxAccount(hostname, httpRealm))
-			return this._storage_json.findLogins(
-					count, hostname, formSubmitURL, httpRealm);
+		if (this._isFirefoxAccount(hostname, httpRealm)) {
+			return this._storage_json.findLogins(count, hostname,
+					formSubmitURL, httpRealm);
+		}
 
 		let login= {
-            hostname: hostname,
-            formSubmitURL: formSubmitURL,
-            httpRealm: httpRealm
-        };
-        let md = {};
-        for each (let prop in ["hostname", "formSubmitURL", "httpRealm"]) {
+			hostname: hostname,
+			formSubmitURL: formSubmitURL,
+			httpRealm: httpRealm
+		};
+		let md = {};
+		for each (let prop in ["hostname", "formSubmitURL", "httpRealm"]) {
 			// empty string means wildcard, null means null
-            if (login[prop] != "") {
-                md[prop] = login[prop];
+			if (login[prop] != "") {
+				md[prop] = login[prop];
 			}
 		}
 
-        let [logins, paths] = this._filterLogins(md);
-        count.value = logins.length;
-        return logins;
+		let [logins, paths] = this._filterLogins(md);
+		count.value = logins.length;
+		return logins;
 	},
 
 	// called to check if its worth calling findLogins,
 	// which may prompt for master password or pinentry in our case
 	countLogins: function countLogins(hostname, formSubmitURL, httpRealm) {
+		if (this._isFirefoxAccount(hostname, httpRealm)) {
+			return this._storage_json.countLogins(hostname, formSubmitURL,
+					httpRealm);
+		}
 		// only way to check if we have logins without
 		// decrypting is by hostname
 		let paths = this._getLoginPaths(hostname);
