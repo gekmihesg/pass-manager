@@ -57,6 +57,9 @@ const EnvironmentVars = [
 const LoginInfo = new Components.Constructor(
 		"@mozilla.org/login-manager/loginInfo;1", Ci.nsILoginInfo);
 
+RegExp.escape = function(s) {
+		return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	};
 
 function PassManager() {}
 PassManager.prototype = {
@@ -68,6 +71,7 @@ PassManager.prototype = {
 	_passCmd: "",
 	_realm: "",
 	_fuzzy: false,
+	_save_as_username: false,
 	_storage_json: null,
 
 	_cache: {
@@ -355,6 +359,7 @@ PassManager.prototype = {
 			observe: function (subject, topic, data) {
 				this.pm._passCmd = subject.getCharPref("pass");
 				this.pm._fuzzy = subject.getBoolPref("fuzzy");
+				this.pm._save_as_username = subject.getBoolPref("save_as_username");
 				this.pm._cache.defaultLifetime = subject.getIntPref("cache");
 
 				// construct realm
@@ -397,16 +402,32 @@ PassManager.prototype = {
 		}
 
 		let paths = this._getLoginPaths(login.hostname);
-		let re = /\/passmanager([0-9]+)$/;
+		let filename = "passmanager";
+		let separator = "";
 		let max = 0;
+		if (this._save_as_username) {
+			let tmp = login.username.replace(/[^a-zA-Z0-9@-_\.]/g, "_").
+					replace(/_+/g, "_").replace(/(^_|_$)/g, "");
+			if (tmp) {
+				filename = tmp;
+				separator = "_";
+				max = -1;
+			}
+		}
+		let re = new RegExp("\\/" + RegExp.escape(filename) +
+				"(?:" + separator + "([0-9]+))?$");
 		for each (let path in paths) {
 			let matches = re.exec(path);
-			if (matches && matches[1] > max) {
-				max = Number(matches[1]);
+			if (matches) {
+				let num = matches[1] ? Number(matches[1]) : 0;
+				if (num > max) {
+					max = num;
+				}
 			}
 		}
 		let path = this._getHostnamePath(login.hostname);
-		this._saveLogin(path + "/passmanager" + (max + 1), login);
+		filename = filename + (max >= 0 ? separator + (max + 1) : "");
+		this._saveLogin(path + "/" + filename, login);
 	},
 
 	removeLogin: function removeLogin(login) {
