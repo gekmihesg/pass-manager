@@ -68,16 +68,7 @@ PassManager.prototype = {
 	_passCmd: "",
 	_realm: "",
 	_fuzzy: false,
-
-	__storage_json: null,
-	get _storage_json() {
-		if (!this.__storage_json) {
-			this.__storage_json = Cc["@mozilla.org/login-manager/storage/json;1"]
-				.getService(Ci.nsILoginManagerStorage);
-			this.__storage_json.initialize();
-		}
-		return this.__storage_json;
-	},
+	_storage_json: null,
 
 	_cache: {
 		defaultLifetime: 300,
@@ -343,7 +334,10 @@ PassManager.prototype = {
 				this._environment.push(env + "=" + e.get(env));
 			}
 		}
-		this._storage_json;
+
+		this._storage_json = Cc["@mozilla.org/login-manager/storage/json;1"].
+				getService(Ci.nsILoginManagerStorage);
+		this._storage_json.initialize();
 
 		// load preferences
 		let prefObserver = {
@@ -425,7 +419,7 @@ PassManager.prototype = {
 	},
 
 	modifyLogin: function modifyLogin(oldLogin, newLogin) {
-		if (this._isFirefoxAccount(newLogin.hostname, newLogin.httpRealm))
+		if (this._isFirefoxAccount(oldLogin.hostname, oldLogin.httpRealm))
 			return this._storage_json.modifyLogin(oldLogin, newLogin);
 		// try to find original login
 		let [logins, paths] = this._filterLogins(oldLogin);
