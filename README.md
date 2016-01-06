@@ -41,10 +41,6 @@ all protocols and forms for ``DOMAIN`` on any port.
 For password only logins, no additional fields are required.
 
 
-### Status
-This software is in **early developement state** and should not be used in
-production environment!
-
 [1]: http://www.passwordstore.org/
 [2]: https://developer.mozilla.org/en-US/docs/Mozilla/Tech/XPCOM/Reference/Interface/nsILoginManagerStorage
 [3]: https://addons.mozilla.org/en-US/firefox/addon/password-exporter/
