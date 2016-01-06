@@ -23,7 +23,10 @@ const Cu = Components.utils;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
-Cu.import("chrome://passmanager/content/subprocess/subprocess.jsm");
+
+const COMMONJS_URI = 'resource://gre/modules/commonjs';
+const { require } = Cu.import(COMMONJS_URI + '/toolkit/require.js', {});
+var subprocess = require('sdk/system/child_process/subprocess');
 
 XPCOMUtils.defineLazyModuleGetter(this, "LoginHelper",
 				"resource://gre/modules/LoginHelper.jsm");
