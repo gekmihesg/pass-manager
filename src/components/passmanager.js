@@ -198,7 +198,6 @@ PassManager.prototype = {
 	},
 	
 	_saveLogin: function (loginPath, login) {
-		LoginHelper.checkLoginValues(login);
 		this._pass(["insert", "-m", "-f", loginPath],
 				this._loginToStr(login));
 
@@ -400,6 +399,7 @@ PassManager.prototype = {
 	},
 
 	addLogin: function addLogin(login) {
+		LoginHelper.checkLoginValues(login);
 		if (this._isFirefoxAccount(login.hostname, login.httpRealm)) {
 			return this._storage_json.addLogin(login);
 		}
