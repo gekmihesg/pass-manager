@@ -147,8 +147,7 @@ PassManager.prototype = {
 
 	_getHostnamePath: function (hostname) {
 		if (hostname) {
-			return this._realm + "/" +
-				this._sanitizeHostname(hostname);
+			return this._realm + "/" + hostname;
 		}
 		return this._realm;
 	},
@@ -226,9 +225,22 @@ PassManager.prototype = {
 
 	// return all paths to logins matching hostname,
 	// all logins if hostname is undefined
-	_getLoginPaths: function (hostname) {
-		let path = this._getHostnamePath(hostname);
-		result = this._pass(["ls", path]);
+	_getLoginPaths: function (url) {
+		var result;
+		let path;
+
+		if (url) {
+			var hostnameParts = this._sanitizeHostname(url).split(".");
+			do {
+				path = this._getHostnamePath(hostnameParts.join("."));
+				result = this._pass(["ls", path]);
+				hostnameParts.shift();
+			} while (hostnameParts.length > 1 && result.exitCode != 0);
+		} else {
+			path = this._getHostnamePath();
+			result = this._pass(["ls", path]);
+		}
+
 		if (result.exitCode != 0) {
 			return [];
 		}
@@ -428,7 +440,7 @@ PassManager.prototype = {
 				}
 			}
 		}
-		let path = this._getHostnamePath(login.hostname);
+		let path = this._getHostnamePath(this._sanitizeHostname(login.hostname));
 		filename = filename + (max >= 0 ? separator + (max + 1) : "");
 		this._saveLogin(path + "/" + filename, login);
 	},
