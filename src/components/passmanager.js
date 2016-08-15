@@ -260,12 +260,19 @@ PassManager.prototype = {
 	},
 
 	// for fuzzy option
-	_autocomplete: function (login, md) {
+	_autocomplete: function (login, md, path) {
 		if (login.hostname) {
 			login.hostname = this._sanitizeURL(login.hostname);
+		} else if (md.hostname) {
+			login.hostname = md.hostname;
 		} else {
-			// set to unknown for "Saved Passwords..."
-			login.hostname = md.hostname ? md.hostname : "unknown";
+			var re = new RegExp("^" + RegExp.escape(this._realm) + "\/([^\/]+).*$");
+			if ((match = re.exec(path)) !== null) {
+				// use hostname from path as fallback
+				login.hostname = "https://" + match[1];
+			} else {
+				login.hostname = "unknown";
+			}
 		}
 		if (login.formSubmitURL) {
 			login.formSubmitURL = this._sanitizeURL(login.formSubmitURL);
@@ -305,7 +312,7 @@ PassManager.prototype = {
 			let login = this._loadLogin(path);
 			if (login) {
 				if (this._fuzzy) {
-					this._autocomplete(login, md);
+					this._autocomplete(login, md, path);
 				}
 				let matches = true;
 				for (let prop in md) {
