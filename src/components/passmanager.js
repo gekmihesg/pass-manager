@@ -76,6 +76,7 @@ PassManager.prototype = {
 	_fuzzy: false,
 	_save_as_username: false,
 	_storage_json: null,
+	_strip_hostnames: [],
 
 	_cache: {
 		defaultLifetime: 300,
@@ -145,10 +146,20 @@ PassManager.prototype = {
 		return url.replace(/^(.*:\/\/[^\/]+)(?:\/.*)?/, "$1");
 	},
 
-	_getHostnamePath: function (hostname) {
+	_getHostnamePath: function (hostname, all) {
 		if (hostname) {
-			return this._realm + "/" +
-				this._sanitizeHostname(hostname);
+			hostname = this._sanitizeHostname(hostname);
+			let options = [this._realm + "/" + hostname];
+			if (this._strip_hostnames.length > 0) {
+				for each (let sub in this._strip_hostnames) {
+					if (hostname.indexOf(sub + ".") == 0) {
+						options.unshift(this._realm + "/" +
+								hostname.substr(sub.length + 1));
+						break;
+					}
+				}
+			}
+			return all ? options : options[0];
 		}
 		return this._realm;
 	},
@@ -227,33 +238,34 @@ PassManager.prototype = {
 	// return all paths to logins matching hostname,
 	// all logins if hostname is undefined
 	_getLoginPaths: function (hostname) {
-		let path = this._getHostnamePath(hostname);
-		result = this._pass(["ls", path]);
-		if (result.exitCode != 0) {
-			return [];
-		}
-		let lines = result.stdout.split("\n");
 		let re = /^(.*[|`]+)-- (.*)$/;
 		let paths = [];
-		let tree = [];
-		let lastIndent = 0;
-		let lastNode = null;
-		for(let i = 0 ; i < lines.length; i++) {
-			let match = re.exec(lines[i]);
-			if(match) {
-				let indent = match[1].length;
-				if (lastNode) {
-					if (lastIndent < indent) {
-						tree.push(lastNode);
-						paths.pop();
-					} else if (lastIndent > indent) {
-						tree.pop();
+		for each (let path in this._getHostnamePath(hostname, true)) {
+			result = this._pass(["ls", path]);
+			if (result.exitCode != 0) {
+				continue;
+			}
+			let lines = result.stdout.split("\n");
+			let tree = [];
+			let lastIndent = 0;
+			let lastNode = null;
+			for (let i = 0 ; i < lines.length; i++) {
+				let match = re.exec(lines[i]);
+				if(match) {
+					let indent = match[1].length;
+					if (lastNode) {
+						if (lastIndent < indent) {
+							tree.push(lastNode);
+							paths.pop();
+						} else if (lastIndent > indent) {
+							tree.pop();
+						}
 					}
+					lastIndent = indent;
+					lastNode = match[2];
+					paths.push(path + "/" +
+						tree.concat([lastNode]).join("/"));
 				}
-				lastIndent = indent;
-				lastNode = match[2];
-				paths.push(path + "/" +
-					tree.concat([lastNode]).join("/"));
 			}
 		}
 		return paths;
@@ -369,6 +381,8 @@ PassManager.prototype = {
 				this.pm._passCmd = subject.getCharPref("pass");
 				this.pm._fuzzy = subject.getBoolPref("fuzzy");
 				this.pm._save_as_username = subject.getBoolPref("save_as_username");
+				this.pm._strip_hostnames = subject.getCharPref("strip_hostnames").
+					toLowerCase().split(",");
 				this.pm._cache.defaultLifetime = subject.getIntPref("cache");
 
 				// construct realm
