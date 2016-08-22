@@ -161,7 +161,7 @@ PassManager.prototype = {
 			}
 			return all ? options : options[0];
 		}
-		return this._realm;
+		return all ? [this._realm] : this._realm;
 	},
 
 	_loginToStr: function (login) {
