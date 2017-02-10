@@ -31,8 +31,6 @@ var subprocess = require('sdk/system/child_process/subprocess');
 XPCOMUtils.defineLazyModuleGetter(this, "LoginHelper",
 				"resource://gre/modules/LoginHelper.jsm");
 
-
-
 // all these values are handled, but false values
 // are not mapped automatically
 const PropertyMap = {
@@ -122,18 +120,25 @@ PassManager.prototype = {
 
 	_pass: function (args, stdin) {
 		let result = null;
-		pi = {
+		let o = '';
+		let pi = {
 			command: this._passCmd,
 			arguments: args,
 			charset: "UTF-8",
 			environment: this._environment,
 			done: function (r) { result = r; },
+			stdout: function (data) { o += data; },
 			stdin: stdin,
 			mergeStderr: false
 		}
 		let p = subprocess.call(pi);
-		p.wait();
-		return result;
+		let rc = p.wait();
+
+		if (p) {
+			p.exitCode = rc;
+			p.stdout = o;
+		}
+		return p;
 	},
 
 	// strip protocol, port and path from URL
