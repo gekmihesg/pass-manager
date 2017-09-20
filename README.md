@@ -1,3 +1,9 @@
+WARNING
+=======
+
+**Not supported any more!**
+This addon heavily relies on legacy features, which will no longer be supported by Firefox 57+ and there doesn't seem to be a way to port the functionality to WebExtensions. There is a final, untested build which might still work with Firefox 56.
+
 pass-manager
 ============
 
